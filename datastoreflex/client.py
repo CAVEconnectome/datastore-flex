@@ -18,7 +18,7 @@ class DatastoreFlex(datastore.Client):
         _http: Any = None,
         _use_grpc: bool = None,
     ):
-        super(DatastoreFlex, self).__init__(
+        super().__init__(
             project=project,
             namespace=namespace,
             credentials=credentials,
@@ -27,10 +27,10 @@ class DatastoreFlex(datastore.Client):
             _use_grpc=_use_grpc,
         )
         self._config = {}
-        self._get = self.get
-        self._get_multi = self.get_multi
-        self._put = self.put
-        self._put_multi = self.put_multi
+        self._get = datastore.Client.get
+        self._get_multi = datastore.Client.get_multi
+        self._put = datastore.Client.put
+        self._put_multi = datastore.Client.put_multi
 
     def _read_config(self) -> None:
         from json import loads
