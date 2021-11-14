@@ -1,7 +1,9 @@
 from typing import Any
 from typing import Iterable
+from os import getenv
+
 from google.cloud import datastore
-from cloudfiles.exceptions import UnsupportedProtocolError
+from cloudfiles import CloudFiles
 
 COMLUMN_CONFIG_KEY_NAME = "column"
 COMLUMN_CONFIG_BUCKET = "bucket_path"
@@ -53,10 +55,15 @@ class DatastoreFlex(datastore.Client):
         self,
         entities: Iterable[datastore.Entity],
         path_elements: Iterable[str],
+        append_none: bool = False,
     ) -> Iterable[str]:
+        """
+        `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
+        """
         bucket = column_config[COMLUMN_CONFIG_BUCKET]
         files = []
         for entity in entities:
+            non_existent = False
             elements = []
             for e in path_elements:
                 try:
@@ -65,13 +72,12 @@ class DatastoreFlex(datastore.Client):
                     # ignore if path element doesn't exist
                     # cloudfiles will error and return None
                     elements.append("non_existent")
+                    non_existent = True
             elements.append(entity.id)
-            files.append("/".join(elements))
+            files.append(None if append_none and non_existent else "/".join(elements))
         return files
 
-    def _fetch_columns(self, entities: Iterable[datastore.Entity]) -> None:
-        from cloudfiles import CloudFiles
-
+    def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
         column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
         for column, config in column_configs.items():
             files = self._get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
@@ -82,6 +88,29 @@ class DatastoreFlex(datastore.Client):
                     continue
                 entity[column] = file_content["content"]
 
+    def _write_columns(self, entities: Iterable[datastore.Entity]) -> None:
+        column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
+        for column, config in column_configs.items():
+            files = self._get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            upload_files = []
+            for entity, file_path in zip(entities, files):
+                try:
+                    file_d = {
+                        "content": entity[column],
+                        "path": file_path,
+                        "compress": getenv("COMPRESSION_TYPE", "gzip"),
+                        "compression_level": int(getenv("COMPRESSION_LEVEL", 6)),
+                        "cache_control": getenv(
+                            "CACHE_CONTROL",
+                            "public; max-age=3600",
+                        ),
+                    }
+                    upload_files.append(file_d)
+                except KeyError:
+                    continue
+            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            cf.puts(upload_files)
+
     def get(
         self,
         key,
@@ -91,7 +120,7 @@ class DatastoreFlex(datastore.Client):
         eventual=False,
         retry=None,
         timeout=None,
-    ):
+    ) -> datastore.Entity:
         entity = self._get(
             key,
             missing=missing,
@@ -102,7 +131,7 @@ class DatastoreFlex(datastore.Client):
             timeout=timeout,
         )
 
-        self._fetch_columns([entity])
+        self._read_columns([entity])
         return entity
 
     def get_multi(
@@ -114,7 +143,7 @@ class DatastoreFlex(datastore.Client):
         eventual=False,
         retry=None,
         timeout=None,
-    ):
+    ) -> Iterable[datastore.Entity]:
         entities = self._get_multi(
             keys,
             missing=missing,
@@ -124,21 +153,15 @@ class DatastoreFlex(datastore.Client):
             retry=retry,
             timeout=timeout,
         )
-        self._fetch_columns(entities)
+        self._read_columns(entities)
         return entities
 
-    def put(
-        self,
-        entity,
-        retry=None,
-        timeout=None,
-    ):
-        pass
+    def put(self, entity, retry=None, timeout=None) -> None:
+        # write to datastore first, higher priority
+        self._put(entity, retry, timeout)
+        self._write_columns([entity])
 
-    def put_multi(
-        self,
-        entities,
-        retry=None,
-        timeout=None,
-    ):
-        pass
+    def put_multi(self, entities, retry=None, timeout=None) -> None:
+        # write to datastore first, higher priority
+        self._put_multi(entities, retry, timeout)
+        self._write_columns(entities)
