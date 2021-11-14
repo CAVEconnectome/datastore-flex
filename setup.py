@@ -28,9 +28,9 @@ setuptools.setup(
     description="Messging Client",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/seung-lab/datastoreflex",
+    url="https://github.com/seung-lab/datastore-flex",
     project_urls={
-        "Bug Tracker": "https://github.com/seung-lab/datastoreflex/issues",
+        "Bug Tracker": "https://github.com/seung-lab/datastore-flex/issues",
     },
     classifiers=[
         "Programming Language :: Python :: 3",

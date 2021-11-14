@@ -1,3 +1,6 @@
 pylint
 black
 codecov
+build
+bumpversion
+twine
