@@ -1,3 +1,7 @@
+"""
+Extends default datastore client.
+"""
+
 from typing import Any
 from typing import Iterable
 from os import getenv
@@ -20,7 +24,8 @@ class DatastoreFlex(datastore.Client):
         _http: Any = None,
         _use_grpc: bool = None,
     ):
-        super().__init__(
+        parent = super()
+        parent.__init__(
             project=project,
             namespace=namespace,
             credentials=credentials,
@@ -29,10 +34,10 @@ class DatastoreFlex(datastore.Client):
             _use_grpc=_use_grpc,
         )
         self._config = {}
-        self._get = datastore.Client.get
-        self._get_multi = datastore.Client.get_multi
-        self._put = datastore.Client.put
-        self._put_multi = datastore.Client.put_multi
+        self._get = parent.get
+        self._get_multi = parent.get_multi
+        self._put = parent.put
+        self._put_multi = parent.put_multi
 
     @property
     def config(self):
@@ -51,36 +56,10 @@ class DatastoreFlex(datastore.Client):
         config = self.get(config_key)
         self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
 
-    def _get_filespaths(
-        self,
-        entities: Iterable[datastore.Entity],
-        path_elements: Iterable[str],
-        append_none: bool = False,
-    ) -> Iterable[str]:
-        """
-        `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
-        """
-        bucket = column_config[COMLUMN_CONFIG_BUCKET]
-        files = []
-        for entity in entities:
-            non_existent = False
-            elements = []
-            for e in path_elements:
-                try:
-                    elements.append(entity[e])
-                except KeyError:
-                    # ignore if path element doesn't exist
-                    # cloudfiles will error and return None
-                    elements.append("non_existent")
-                    non_existent = True
-            elements.append(entity.id)
-            files.append(None if append_none and non_existent else "/".join(elements))
-        return files
-
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
         column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
         for column, config in column_configs.items():
-            files = self._get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
             cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
             files = cf.get(files)
             for entity, file_content in zip(entities, files):
@@ -91,7 +70,7 @@ class DatastoreFlex(datastore.Client):
     def _write_columns(self, entities: Iterable[datastore.Entity]) -> None:
         column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
         for column, config in column_configs.items():
-            files = self._get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
             upload_files = []
             for entity, file_path in zip(entities, files):
                 try:
@@ -99,7 +78,7 @@ class DatastoreFlex(datastore.Client):
                         "content": entity[column],
                         "path": file_path,
                         "compress": getenv("COMPRESSION_TYPE", "gzip"),
-                        "compression_level": int(getenv("COMPRESSION_LEVEL", 6)),
+                        "compression_level": int(getenv("COMPRESSION_LEVEL", "6")),
                         "cache_control": getenv(
                             "CACHE_CONTROL",
                             "public; max-age=3600",
@@ -122,7 +101,7 @@ class DatastoreFlex(datastore.Client):
         timeout=None,
     ) -> datastore.Entity:
         entity = self._get(
-            key,
+            key=key,
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -145,7 +124,7 @@ class DatastoreFlex(datastore.Client):
         timeout=None,
     ) -> Iterable[datastore.Entity]:
         entities = self._get_multi(
-            keys,
+            keys=keys,
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -165,3 +144,28 @@ class DatastoreFlex(datastore.Client):
         # write to datastore first, higher priority
         self._put_multi(entities, retry, timeout)
         self._write_columns(entities)
+
+
+def _get_filespaths(
+    entities: Iterable[datastore.Entity],
+    path_elements: Iterable[str],
+    append_none: bool = False,
+) -> Iterable[str]:
+    """
+    `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
+    """
+    files = []
+    for entity in entities:
+        non_existent = False
+        elements = []
+        for element in path_elements:
+            try:
+                elements.append(entity[element])
+            except KeyError:
+                # ignore if path element doesn't exist
+                # cloudfiles will error and return None
+                elements.append("non_existent")
+                non_existent = True
+        elements.append(entity.id)
+        files.append(None if append_none and non_existent else "/".join(elements))
+    return files
