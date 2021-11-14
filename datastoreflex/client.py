@@ -1,10 +1,16 @@
+"""
+Extends default datastore client.
+"""
+
 from typing import Any
+from typing import Iterable
+from os import getenv
+
 from google.cloud import datastore
 from cloudfiles import CloudFiles
-from cloudfiles.exceptions import UnsupportedProtocolError
 
 COMLUMN_CONFIG_KEY_NAME = "column"
-COMLUMN_CONFIG_BUCKET = "path"
+COMLUMN_CONFIG_BUCKET = "bucket_path"
 COMLUMN_CONFIG_PATH_ELEMENTS = "path_elements"
 
 
@@ -18,7 +24,8 @@ class DatastoreFlex(datastore.Client):
         _http: Any = None,
         _use_grpc: bool = None,
     ):
-        super(DatastoreFlex, self).__init__(
+        parent = super()
+        parent.__init__(
             project=project,
             namespace=namespace,
             credentials=credentials,
@@ -27,10 +34,16 @@ class DatastoreFlex(datastore.Client):
             _use_grpc=_use_grpc,
         )
         self._config = {}
-        self._get = self.get
-        self._get_multi = self.get_multi
-        self._put = self.put
-        self._put_multi = self.put_multi
+        self._get = parent.get
+        self._get_multi = parent.get_multi
+        self._put = parent.put
+        self._put_multi = parent.put_multi
+
+    @property
+    def config(self):
+        if self._config is None:
+            self._read_config()
+        return self._config
 
     def _read_config(self) -> None:
         from json import loads
@@ -43,27 +56,39 @@ class DatastoreFlex(datastore.Client):
         config = self.get(config_key)
         self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
 
-    @property
-    def config(self):
-        if self._config is None:
-            self._read_config()
-        return self._config
+    def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
+        column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
+        for column, config in column_configs.items():
+            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            files = cf.get(files)
+            for entity, file_content in zip(entities, files):
+                if file_content["error"] is not None:
+                    continue
+                entity[column] = file_content["content"]
 
-    def _parse_entity(self, entity: datastore.Entity) -> None:
-        column_config = self.config[COMLUMN_CONFIG_KEY_NAME]
-        for column, config in column_config.items():
-            bucket = config[COMLUMN_CONFIG_BUCKET]
-            path_elements = []
-            for e in config[COMLUMN_CONFIG_PATH_ELEMENTS]:
+    def _write_columns(self, entities: Iterable[datastore.Entity]) -> None:
+        column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
+        for column, config in column_configs.items():
+            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            upload_files = []
+            for entity, file_path in zip(entities, files):
                 try:
-                    path_elements.append(entity[e])
+                    file_d = {
+                        "content": entity[column],
+                        "path": file_path,
+                        "compress": getenv("COMPRESSION_TYPE", "gzip"),
+                        "compression_level": int(getenv("COMPRESSION_LEVEL", "6")),
+                        "cache_control": getenv(
+                            "CACHE_CONTROL",
+                            "public; max-age=3600",
+                        ),
+                    }
+                    upload_files.append(file_d)
                 except KeyError:
-                    # ignore if path element doesn't exist
-                    return
-
-            path = "/".join(path_elements)
-            cf = CloudFiles(f"{column_path}/{path}")
-            entity[column] = cf.get(entity.id)
+                    continue
+            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            cf.puts(upload_files)
 
     def get(
         self,
@@ -74,9 +99,9 @@ class DatastoreFlex(datastore.Client):
         eventual=False,
         retry=None,
         timeout=None,
-    ):
+    ) -> datastore.Entity:
         entity = self._get(
-            key,
+            key=key,
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -85,7 +110,7 @@ class DatastoreFlex(datastore.Client):
             timeout=timeout,
         )
 
-        self._parse_entity(entity)
+        self._read_columns([entity])
         return entity
 
     def get_multi(
@@ -97,9 +122,9 @@ class DatastoreFlex(datastore.Client):
         eventual=False,
         retry=None,
         timeout=None,
-    ):
+    ) -> Iterable[datastore.Entity]:
         entities = self._get_multi(
-            keys,
+            keys=keys,
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -107,22 +132,40 @@ class DatastoreFlex(datastore.Client):
             retry=retry,
             timeout=timeout,
         )
-        for entity in entities:
-            self._parse_entity(entity)
+        self._read_columns(entities)
         return entities
 
-    def put(
-        self,
-        entity,
-        retry=None,
-        timeout=None,
-    ):
-        pass
+    def put(self, entity, retry=None, timeout=None) -> None:
+        # write to datastore first, higher priority
+        self._put(entity, retry, timeout)
+        self._write_columns([entity])
 
-    def put_multi(
-        self,
-        entities,
-        retry=None,
-        timeout=None,
-    ):
-        pass
+    def put_multi(self, entities, retry=None, timeout=None) -> None:
+        # write to datastore first, higher priority
+        self._put_multi(entities, retry, timeout)
+        self._write_columns(entities)
+
+
+def _get_filespaths(
+    entities: Iterable[datastore.Entity],
+    path_elements: Iterable[str],
+    append_none: bool = False,
+) -> Iterable[str]:
+    """
+    `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
+    """
+    files = []
+    for entity in entities:
+        non_existent = False
+        elements = []
+        for element in path_elements:
+            try:
+                elements.append(entity[element])
+            except KeyError:
+                # ignore if path element doesn't exist
+                # cloudfiles will error and return None
+                elements.append("non_existent")
+                non_existent = True
+        elements.append(entity.id)
+        files.append(None if append_none and non_existent else "/".join(elements))
+    return files
