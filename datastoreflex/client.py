@@ -4,6 +4,7 @@ Extends default datastore client.
 
 from typing import Any
 from typing import Iterable
+from typing import Optional
 from os import getenv
 
 from google.cloud import datastore
@@ -67,18 +68,27 @@ class DatastoreFlex(datastore.Client):
                     continue
                 entity[column] = file_content["content"]
 
-    def _write_columns(self, entities: Iterable[datastore.Entity]) -> None:
+    def _write_columns(
+        self,
+        entities: Iterable[datastore.Entity],
+        compression: str,
+        compression_level: int,
+    ) -> None:
         column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
         for column, config in column_configs.items():
-            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            files = _get_filespaths(
+                entities, config[COMLUMN_CONFIG_PATH_ELEMENTS], append_none=True
+            )
             upload_files = []
             for entity, file_path in zip(entities, files):
+                if file_path is None:
+                    continue
                 try:
                     file_d = {
                         "content": entity[column],
                         "path": file_path,
-                        "compress": getenv("COMPRESSION_TYPE", "gzip"),
-                        "compression_level": int(getenv("COMPRESSION_LEVEL", "6")),
+                        "compress": compression,
+                        "compression_level": compression_level,
                         "cache_control": getenv(
                             "CACHE_CONTROL",
                             "public; max-age=3600",
@@ -135,15 +145,37 @@ class DatastoreFlex(datastore.Client):
         self._read_columns(entities)
         return entities
 
-    def put(self, entity, retry=None, timeout=None) -> None:
+    def put(
+        self,
+        entity,
+        retry=None,
+        timeout=None,
+        compression: Optional[str] = "gzip",
+        compression_level: Optional[int] = 6,
+    ) -> None:
         # write to datastore first, higher priority
         self._put(entity, retry, timeout)
-        self._write_columns([entity])
+        self._write_columns(
+            [entity],
+            compression=compression,
+            compression_level=compression_level,
+        )
 
-    def put_multi(self, entities, retry=None, timeout=None) -> None:
+    def put_multi(
+        self,
+        entities,
+        retry=None,
+        timeout=None,
+        compression: Optional[str] = "gzip",
+        compression_level: Optional[int] = 6,
+    ) -> None:
         # write to datastore first, higher priority
         self._put_multi(entities, retry, timeout)
-        self._write_columns(entities)
+        self._write_columns(
+            entities,
+            compression=compression,
+            compression_level=compression_level,
+        )
 
 
 def _get_filespaths(
@@ -152,7 +184,7 @@ def _get_filespaths(
     append_none: bool = False,
 ) -> Iterable[str]:
     """
-    `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
+    `append_none` is used to determine whether a file needs to be written in `put` and `put_multi`
     """
     files = []
     for entity in entities:
