@@ -34,17 +34,33 @@ class DatastoreFlex(datastore.Client):
             _http=_http,
             _use_grpc=_use_grpc,
         )
-        self._config = {}
-        self._get = parent.get
+        self._config = None
+
+        # datastore client uses multi versions for `get` and `put` internally
+        # this leads to recursion if `get` and `put` are overidden
         self._get_multi = parent.get_multi
-        self._put = parent.put
         self._put_multi = parent.put_multi
 
     @property
     def config(self):
         if self._config is None:
+            self._config = {}
             self._read_config()
-        return self._config
+        return self._config.get(COMLUMN_CONFIG_KEY_NAME, {})
+
+    def add_config(self, config: dict = {}) -> datastore.Entity:
+        from json import dumps
+
+        config_key = self.key(
+            f"{self.namespace}_config",
+            COMLUMN_CONFIG_KEY_NAME,
+            namespace=self.namespace,
+        )
+        config_entity = datastore.Entity(config_key)
+        config_entity["value"] = dumps(config)
+        self._put_multi([config_entity])
+        self._config = None
+        return config_entity
 
     def _read_config(self) -> None:
         from json import loads
@@ -54,7 +70,7 @@ class DatastoreFlex(datastore.Client):
             COMLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
-        config = self.get(config_key)
+        config = self._get_multi([config_key])[0]
         self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
 
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
@@ -110,8 +126,8 @@ class DatastoreFlex(datastore.Client):
         retry=None,
         timeout=None,
     ) -> datastore.Entity:
-        entity = self._get(
-            key=key,
+        entities = self._get_multi(
+            keys=[key],
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -119,6 +135,10 @@ class DatastoreFlex(datastore.Client):
             retry=retry,
             timeout=timeout,
         )
+        if entities:
+            entity = entities[0]
+        else:
+            return None
 
         self._read_columns([entity])
         return entity
@@ -153,8 +173,7 @@ class DatastoreFlex(datastore.Client):
         compression: Optional[str] = "gzip",
         compression_level: Optional[int] = 6,
     ) -> None:
-        # write to datastore first, higher priority
-        self._put(entity, retry, timeout)
+        self._put_multi([entity], retry, timeout)
         self._write_columns(
             [entity],
             compression=compression,
@@ -169,7 +188,6 @@ class DatastoreFlex(datastore.Client):
         compression: Optional[str] = "gzip",
         compression_level: Optional[int] = 6,
     ) -> None:
-        # write to datastore first, higher priority
         self._put_multi(entities, retry, timeout)
         self._write_columns(
             entities,
