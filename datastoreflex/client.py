@@ -4,6 +4,7 @@ Extends default datastore client.
 
 from typing import Any
 from typing import Iterable
+from typing import Optional
 from os import getenv
 
 from google.cloud import datastore
@@ -33,17 +34,33 @@ class DatastoreFlex(datastore.Client):
             _http=_http,
             _use_grpc=_use_grpc,
         )
-        self._config = {}
-        self._get = parent.get
+        self._config = None
+
+        # datastore client uses multi versions for `get` and `put` internally
+        # this leads to recursion if `get` and `put` are overidden
         self._get_multi = parent.get_multi
-        self._put = parent.put
         self._put_multi = parent.put_multi
 
     @property
     def config(self):
         if self._config is None:
+            self._config = {}
             self._read_config()
-        return self._config
+        return self._config.get(COMLUMN_CONFIG_KEY_NAME, {})
+
+    def add_config(self, config: dict = {}) -> datastore.Entity:
+        from json import dumps
+
+        config_key = self.key(
+            f"{self.namespace}_config",
+            COMLUMN_CONFIG_KEY_NAME,
+            namespace=self.namespace,
+        )
+        config_entity = datastore.Entity(config_key)
+        config_entity["value"] = dumps(config)
+        self._put_multi([config_entity])
+        self._config = None
+        return config_entity
 
     def _read_config(self) -> None:
         from json import loads
@@ -53,7 +70,7 @@ class DatastoreFlex(datastore.Client):
             COMLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
-        config = self.get(config_key)
+        config = self._get_multi([config_key])[0]
         self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
 
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
@@ -67,18 +84,27 @@ class DatastoreFlex(datastore.Client):
                     continue
                 entity[column] = file_content["content"]
 
-    def _write_columns(self, entities: Iterable[datastore.Entity]) -> None:
+    def _write_columns(
+        self,
+        entities: Iterable[datastore.Entity],
+        compression: str,
+        compression_level: int,
+    ) -> None:
         column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
         for column, config in column_configs.items():
-            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
+            files = _get_filespaths(
+                entities, config[COMLUMN_CONFIG_PATH_ELEMENTS], append_none=True
+            )
             upload_files = []
             for entity, file_path in zip(entities, files):
+                if file_path is None:
+                    continue
                 try:
                     file_d = {
                         "content": entity[column],
                         "path": file_path,
-                        "compress": getenv("COMPRESSION_TYPE", "gzip"),
-                        "compression_level": int(getenv("COMPRESSION_LEVEL", "6")),
+                        "compress": compression,
+                        "compression_level": compression_level,
                         "cache_control": getenv(
                             "CACHE_CONTROL",
                             "public; max-age=3600",
@@ -100,8 +126,8 @@ class DatastoreFlex(datastore.Client):
         retry=None,
         timeout=None,
     ) -> datastore.Entity:
-        entity = self._get(
-            key=key,
+        entities = self._get_multi(
+            keys=[key],
             missing=missing,
             deferred=deferred,
             transaction=transaction,
@@ -109,6 +135,10 @@ class DatastoreFlex(datastore.Client):
             retry=retry,
             timeout=timeout,
         )
+        if entities:
+            entity = entities[0]
+        else:
+            return None
 
         self._read_columns([entity])
         return entity
@@ -135,15 +165,35 @@ class DatastoreFlex(datastore.Client):
         self._read_columns(entities)
         return entities
 
-    def put(self, entity, retry=None, timeout=None) -> None:
-        # write to datastore first, higher priority
-        self._put(entity, retry, timeout)
-        self._write_columns([entity])
+    def put(
+        self,
+        entity,
+        retry=None,
+        timeout=None,
+        compression: Optional[str] = "gzip",
+        compression_level: Optional[int] = 6,
+    ) -> None:
+        self._put_multi([entity], retry, timeout)
+        self._write_columns(
+            [entity],
+            compression=compression,
+            compression_level=compression_level,
+        )
 
-    def put_multi(self, entities, retry=None, timeout=None) -> None:
-        # write to datastore first, higher priority
+    def put_multi(
+        self,
+        entities,
+        retry=None,
+        timeout=None,
+        compression: Optional[str] = "gzip",
+        compression_level: Optional[int] = 6,
+    ) -> None:
         self._put_multi(entities, retry, timeout)
-        self._write_columns(entities)
+        self._write_columns(
+            entities,
+            compression=compression,
+            compression_level=compression_level,
+        )
 
 
 def _get_filespaths(
@@ -152,7 +202,7 @@ def _get_filespaths(
     append_none: bool = False,
 ) -> Iterable[str]:
     """
-    `append_none` is used to determine whether a file needs to be written in `put` or `put_multi`
+    `append_none` is used to determine whether a file needs to be written in `put` and `put_multi`
     """
     files = []
     for entity in entities:
