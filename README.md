@@ -10,6 +10,6 @@ client = DatastoreFlex(project="<project-id>", namespace="<namespace>")
 # Value for `v1` will be stored in the path `gs://ngl_states/<group_id>/<user_id>`
 # where <group_d> = entity["group_id"] and <user_id> = entity["user_id"]
 
-config = {"v1": {"bucket_path": "gs://ngl_states", "path_elements": ["group_id", "user_id"]}}
+config = {"v1": {"bucket_path": "gs://my_data_bucket", "path_elements": ["group_id", "user_id"]}}
 client.add_config(config)
 ```
