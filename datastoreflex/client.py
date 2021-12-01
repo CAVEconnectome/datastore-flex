@@ -46,7 +46,7 @@ class DatastoreFlex(datastore.Client):
         if self._config is None:
             self._config = {}
             self._read_config()
-        return self._config.get(COMLUMN_CONFIG_KEY_NAME, {})
+        return self._config
 
     def add_config(self, config: dict = {}) -> datastore.Entity:
         from json import dumps
@@ -113,6 +113,7 @@ class DatastoreFlex(datastore.Client):
                     upload_files.append(file_d)
                 except KeyError:
                     continue
+                entity.pop(column, None)
             cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
             cf.puts(upload_files)
 
@@ -173,12 +174,12 @@ class DatastoreFlex(datastore.Client):
         compression: Optional[str] = "gzip",
         compression_level: Optional[int] = 6,
     ) -> None:
-        self._put_multi([entity], retry, timeout)
         self._write_columns(
             [entity],
             compression=compression,
             compression_level=compression_level,
         )
+        self._put_multi([entity], retry, timeout)
 
     def put_multi(
         self,
@@ -188,12 +189,12 @@ class DatastoreFlex(datastore.Client):
         compression: Optional[str] = "gzip",
         compression_level: Optional[int] = 6,
     ) -> None:
-        self._put_multi(entities, retry, timeout)
         self._write_columns(
             entities,
             compression=compression,
             compression_level=compression_level,
         )
+        self._put_multi(entities, retry, timeout)
 
 
 def _get_filespaths(
@@ -216,6 +217,6 @@ def _get_filespaths(
                 # cloudfiles will error and return None
                 elements.append("non_existent")
                 non_existent = True
-        elements.append(entity.id)
+        elements.append(entity.key.id_or_name)
         files.append(None if append_none and non_existent else "/".join(elements))
     return files
