@@ -70,11 +70,14 @@ class DatastoreFlex(datastore.Client):
             COMLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
-        config = self._get_multi([config_key])[0]
-        self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
+        try:
+            config = self._get_multi([config_key])[0]
+            self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
+        except IndexError:
+            self._config[COMLUMN_CONFIG_KEY_NAME] = {}
 
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
-        column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
+        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
             cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
@@ -90,7 +93,7 @@ class DatastoreFlex(datastore.Client):
         compression: str,
         compression_level: int,
     ) -> None:
-        column_configs = self.config[COMLUMN_CONFIG_KEY_NAME]
+        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(
                 entities, config[COMLUMN_CONFIG_PATH_ELEMENTS], append_none=True
