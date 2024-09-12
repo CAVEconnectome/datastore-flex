@@ -10,9 +10,9 @@ from os import getenv
 from google.cloud import datastore
 from cloudfiles import CloudFiles
 
-COMLUMN_CONFIG_KEY_NAME = "column"
-COMLUMN_CONFIG_BUCKET = "bucket_path"
-COMLUMN_CONFIG_PATH_ELEMENTS = "path_elements"
+COLUMN_CONFIG_KEY_NAME = "column"
+COLUMN_CONFIG_BUCKET = "bucket_path"
+COLUMN_CONFIG_PATH_ELEMENTS = "path_elements"
 
 
 class DatastoreFlex(datastore.Client):
@@ -53,7 +53,7 @@ class DatastoreFlex(datastore.Client):
 
         config_key = self.key(
             f"{self.namespace}_config",
-            COMLUMN_CONFIG_KEY_NAME,
+            COLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
         config_entity = datastore.Entity(config_key)
@@ -67,20 +67,20 @@ class DatastoreFlex(datastore.Client):
 
         config_key = self.key(
             f"{self.namespace}_config",
-            COMLUMN_CONFIG_KEY_NAME,
+            COLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
         try:
             config = self._get_multi([config_key])[0]
-            self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
+            self._config[COLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
         except IndexError:
-            self._config[COMLUMN_CONFIG_KEY_NAME] = {}
+            self._config[COLUMN_CONFIG_KEY_NAME] = {}
 
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
-        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
+        column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
-            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
-            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            files = _get_filespaths(entities, config[COLUMN_CONFIG_PATH_ELEMENTS])
+            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
             files = cf.get(files)
             for entity, file_content in zip(entities, files):
                 if file_content["error"] is not None:
@@ -93,10 +93,10 @@ class DatastoreFlex(datastore.Client):
         compression: str,
         compression_level: int,
     ) -> None:
-        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
+        column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(
-                entities, config[COMLUMN_CONFIG_PATH_ELEMENTS], append_none=True
+                entities, config[COLUMN_CONFIG_PATH_ELEMENTS], append_none=True
             )
             upload_files = []
             for entity, file_path in zip(entities, files):
@@ -117,7 +117,7 @@ class DatastoreFlex(datastore.Client):
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
             cf.puts(upload_files)
 
     def get(
