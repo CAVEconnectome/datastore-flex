@@ -75,7 +75,8 @@ class DatastoreFlex(datastore.Client):
         column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(entities, config[COLUMN_CONFIG_PATH_ELEMENTS])
-            files = CloudFiles(config[COLUMN_CONFIG_BUCKET]).get(files)
+            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
+            files = cf.get(files)
             for entity, file_content in zip(entities, files):
                 if file_content["error"] is not None:
                     continue
@@ -112,7 +113,8 @@ class DatastoreFlex(datastore.Client):
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            CloudFiles(config[COLUMN_CONFIG_BUCKET]).puts(upload_files)
+            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
+            cf.puts(upload_files)
 
     def get(
         self,
