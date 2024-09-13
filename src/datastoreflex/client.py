@@ -59,6 +59,8 @@ class DatastoreFlex(datastore.Client):
                 secrets_file = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
                 with open(secrets_file, "r") as f:
                     secrets = json.load(f)
+            else:
+                secrets = None
             self._secrets = secrets
         return self._secrets
 
