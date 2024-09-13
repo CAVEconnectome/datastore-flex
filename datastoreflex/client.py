@@ -99,22 +99,25 @@ class DatastoreFlex(datastore.Client):
                 if file_path is None:
                     continue
                 try:
-                    file_d = {
-                        "content": entity[column],
-                        "path": file_path,
-                        "compress": compression,
-                        "compression_level": compression_level,
-                        "cache_control": getenv(
-                            "CACHE_CONTROL",
-                            "public; max-age=3600",
-                        ),
-                    }
-                    upload_files.append(file_d)
+                    content = entity[column]
+                    if content is not None:
+                        file_d = {
+                            "content": content,
+                            "path": file_path,
+                            "compress": compression,
+                            "compression_level": compression_level,
+                            "cache_control": getenv(
+                                "CACHE_CONTROL",
+                                "public; max-age=3600",
+                            ),
+                        }
+                        upload_files.append(file_d)
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
-            cf.puts(upload_files)
+            if len(upload_files) > 0:
+                cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
+                cf.puts(upload_files)
 
     def get(
         self,
