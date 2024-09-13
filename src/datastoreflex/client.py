@@ -2,13 +2,13 @@
 Extends default datastore client.
 """
 
-from typing import Any
-from typing import Iterable
-from typing import Optional
+import json
+import os
 from os import getenv
+from typing import Any, Iterable, Optional
 
-from google.cloud import datastore
 from cloudfiles import CloudFiles
+from google.cloud import datastore
 
 COLUMN_CONFIG_KEY_NAME = "column"
 COLUMN_CONFIG_BUCKET = "bucket_path"
@@ -48,23 +48,36 @@ class DatastoreFlex(datastore.Client):
             self._read_config()
         return self._config
 
-    def add_config(self, config: dict = {}) -> datastore.Entity:
-        from json import dumps
+    @property
+    def secrets(self):
+        # TODO what is the preferred way to pass the secrets dict down?
+        # `credentials` is not formatted in the same way. this might not be an issue
+        # in production
+        if self._secrets is None:
+            if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+                secrets_file = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+                with open(secrets_file, "r") as f:
+                    secrets = json.load(f)
+            self._secrets = secrets
+        return self._secrets
 
+    def _cloudfiles(self, path: str):
+        cf = CloudFiles(path, secrets=self.secrets)
+        return cf
+
+    def add_config(self, config: dict = {}) -> datastore.Entity:
         config_key = self.key(
             f"{self.namespace}_config",
             COLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
         config_entity = datastore.Entity(config_key)
-        config_entity["value"] = dumps(config)
+        config_entity["value"] = json.dumps(config)
         self._put_multi([config_entity])
         self._config = None
         return config_entity
 
     def _read_config(self) -> None:
-        from json import loads
-
         config_key = self.key(
             f"{self.namespace}_config",
             COLUMN_CONFIG_KEY_NAME,
@@ -72,7 +85,7 @@ class DatastoreFlex(datastore.Client):
         )
         try:
             config = self._get_multi([config_key])[0]
-            self._config[COLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
+            self._config[COLUMN_CONFIG_KEY_NAME] = json.loads(config.get("value", "{}"))
         except IndexError:
             self._config[COLUMN_CONFIG_KEY_NAME] = {}
 
@@ -80,8 +93,7 @@ class DatastoreFlex(datastore.Client):
         column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(entities, config[COLUMN_CONFIG_PATH_ELEMENTS])
-            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
-            files = cf.get(files)
+            files = self._cloudfiles(config[COLUMN_CONFIG_BUCKET]).get(files)
             for entity, file_content in zip(entities, files):
                 if file_content["error"] is not None:
                     continue
@@ -93,6 +105,7 @@ class DatastoreFlex(datastore.Client):
         compression: str,
         compression_level: int,
     ) -> None:
+        self._allocate_ids(entities)
         column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(
@@ -117,8 +130,7 @@ class DatastoreFlex(datastore.Client):
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
-            cf.puts(upload_files)
+            self._cloudfiles(config[COLUMN_CONFIG_BUCKET]).puts(upload_files)
 
     def get(
         self,
@@ -199,6 +211,17 @@ class DatastoreFlex(datastore.Client):
         )
         self._put_multi(entities, retry, timeout)
 
+    def _allocate_ids(self, entities: Iterable[datastore.Entity]) -> None:
+        # otherwise, entities won't have an ID to index before put
+        # need them to have one for writing to the bucket
+        unnamed_entities = [entity for entity in entities if entity.key.id is None]
+        if len(unnamed_entities) > 0:
+            # assuming they all share the same base, possibly not safe
+            base_key = unnamed_entities[0].key
+            ids = self.allocate_ids(base_key, len(unnamed_entities))
+            for entity, key_id in zip(unnamed_entities, ids):
+                entity.key = key_id
+
 
 def _get_filespaths(
     entities: Iterable[datastore.Entity],
@@ -220,6 +243,6 @@ def _get_filespaths(
                 # cloudfiles will error and return None
                 elements.append("non_existent")
                 non_existent = True
-        elements.append(entity.key.id_or_name)
+        elements.append(str(entity.key.id_or_name))
         files.append(None if append_none and non_existent else "/".join(elements))
     return files
