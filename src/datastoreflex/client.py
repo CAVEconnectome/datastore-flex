@@ -3,7 +3,6 @@ Extends default datastore client.
 """
 
 import json
-import os
 from os import getenv
 from typing import Any, Iterable, Optional
 
@@ -49,25 +48,6 @@ class DatastoreFlex(datastore.Client):
             self._read_config()
         return self._config
 
-    @property
-    def secrets(self):
-        # TODO what is the preferred way to pass the secrets dict down?
-        # `credentials` is not formatted in the same way. this might not be an issue
-        # in production
-        if self._secrets is None:
-            if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
-                secrets_file = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-                with open(secrets_file, "r") as f:
-                    secrets = json.load(f)
-            else:
-                secrets = None
-            self._secrets = secrets
-        return self._secrets
-
-    def _cloudfiles(self, path: str):
-        cf = CloudFiles(path, secrets=self.secrets)
-        return cf
-
     def add_config(self, config: dict = {}) -> datastore.Entity:
         config_key = self.key(
             f"{self.namespace}_config",
@@ -96,7 +76,7 @@ class DatastoreFlex(datastore.Client):
         column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(entities, config[COLUMN_CONFIG_PATH_ELEMENTS])
-            files = self._cloudfiles(config[COLUMN_CONFIG_BUCKET]).get(files)
+            files = CloudFiles(config[COLUMN_CONFIG_BUCKET]).get(files)
             for entity, file_content in zip(entities, files):
                 if file_content["error"] is not None:
                     continue
@@ -133,7 +113,7 @@ class DatastoreFlex(datastore.Client):
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            self._cloudfiles(config[COLUMN_CONFIG_BUCKET]).puts(upload_files)
+            CloudFiles(config[COLUMN_CONFIG_BUCKET]).puts(upload_files)
 
     def get(
         self,
