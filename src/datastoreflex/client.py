@@ -34,7 +34,6 @@ class DatastoreFlex(datastore.Client):
             _use_grpc=_use_grpc,
         )
         self._config = None
-        self._secrets = None
 
         # datastore client uses multi versions for `get` and `put` internally
         # this leads to recursion if `get` and `put` are overidden
