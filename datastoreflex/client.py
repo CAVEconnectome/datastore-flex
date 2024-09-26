@@ -2,17 +2,16 @@
 Extends default datastore client.
 """
 
-from typing import Any
-from typing import Iterable
-from typing import Optional
+import json
 from os import getenv
+from typing import Any, Iterable, Optional
 
-from google.cloud import datastore
 from cloudfiles import CloudFiles
+from google.cloud import datastore
 
-COMLUMN_CONFIG_KEY_NAME = "column"
-COMLUMN_CONFIG_BUCKET = "bucket_path"
-COMLUMN_CONFIG_PATH_ELEMENTS = "path_elements"
+COLUMN_CONFIG_KEY_NAME = "column"
+COLUMN_CONFIG_BUCKET = "bucket_path"
+COLUMN_CONFIG_PATH_ELEMENTS = "path_elements"
 
 
 class DatastoreFlex(datastore.Client):
@@ -49,38 +48,34 @@ class DatastoreFlex(datastore.Client):
         return self._config
 
     def add_config(self, config: dict = {}) -> datastore.Entity:
-        from json import dumps
-
         config_key = self.key(
             f"{self.namespace}_config",
-            COMLUMN_CONFIG_KEY_NAME,
+            COLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
         config_entity = datastore.Entity(config_key)
-        config_entity["value"] = dumps(config)
+        config_entity["value"] = json.dumps(config)
         self._put_multi([config_entity])
         self._config = None
         return config_entity
 
     def _read_config(self) -> None:
-        from json import loads
-
         config_key = self.key(
             f"{self.namespace}_config",
-            COMLUMN_CONFIG_KEY_NAME,
+            COLUMN_CONFIG_KEY_NAME,
             namespace=self.namespace,
         )
         try:
             config = self._get_multi([config_key])[0]
-            self._config[COMLUMN_CONFIG_KEY_NAME] = loads(config.get("value", "{}"))
+            self._config[COLUMN_CONFIG_KEY_NAME] = json.loads(config.get("value", "{}"))
         except IndexError:
-            self._config[COMLUMN_CONFIG_KEY_NAME] = {}
+            self._config[COLUMN_CONFIG_KEY_NAME] = {}
 
     def _read_columns(self, entities: Iterable[datastore.Entity]) -> None:
-        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
+        column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
-            files = _get_filespaths(entities, config[COMLUMN_CONFIG_PATH_ELEMENTS])
-            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
+            files = _get_filespaths(entities, config[COLUMN_CONFIG_PATH_ELEMENTS])
+            cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
             files = cf.get(files)
             for entity, file_content in zip(entities, files):
                 if file_content["error"] is not None:
@@ -93,32 +88,36 @@ class DatastoreFlex(datastore.Client):
         compression: str,
         compression_level: int,
     ) -> None:
-        column_configs = self.config.get(COMLUMN_CONFIG_KEY_NAME, {})
+        self._allocate_ids(entities)
+        column_configs = self.config.get(COLUMN_CONFIG_KEY_NAME, {})
         for column, config in column_configs.items():
             files = _get_filespaths(
-                entities, config[COMLUMN_CONFIG_PATH_ELEMENTS], append_none=True
+                entities, config[COLUMN_CONFIG_PATH_ELEMENTS], append_none=True
             )
             upload_files = []
             for entity, file_path in zip(entities, files):
                 if file_path is None:
                     continue
                 try:
-                    file_d = {
-                        "content": entity[column],
-                        "path": file_path,
-                        "compress": compression,
-                        "compression_level": compression_level,
-                        "cache_control": getenv(
-                            "CACHE_CONTROL",
-                            "public; max-age=3600",
-                        ),
-                    }
-                    upload_files.append(file_d)
+                    content = entity[column]
+                    if content is not None:
+                        file_d = {
+                            "content": content,
+                            "path": file_path,
+                            "compress": compression,
+                            "compression_level": compression_level,
+                            "cache_control": getenv(
+                                "CACHE_CONTROL",
+                                "public; max-age=3600",
+                            ),
+                        }
+                        upload_files.append(file_d)
                 except KeyError:
                     continue
                 entity.pop(column, None)
-            cf = CloudFiles(config[COMLUMN_CONFIG_BUCKET])
-            cf.puts(upload_files)
+            if len(upload_files) > 0:
+                cf = CloudFiles(config[COLUMN_CONFIG_BUCKET])
+                cf.puts(upload_files)
 
     def get(
         self,
@@ -199,6 +198,17 @@ class DatastoreFlex(datastore.Client):
         )
         self._put_multi(entities, retry, timeout)
 
+    def _allocate_ids(self, entities: Iterable[datastore.Entity]) -> None:
+        # otherwise, entities won't have an ID to index before put
+        # need them to have one for writing to the bucket
+        unnamed_entities = [entity for entity in entities if entity.key.id is None]
+        if len(unnamed_entities) > 0:
+            # assuming they all share the same base, possibly not safe
+            base_key = unnamed_entities[0].key
+            ids = self.allocate_ids(base_key, len(unnamed_entities))
+            for entity, key_id in zip(unnamed_entities, ids):
+                entity.key = key_id
+
 
 def _get_filespaths(
     entities: Iterable[datastore.Entity],
@@ -220,6 +230,6 @@ def _get_filespaths(
                 # cloudfiles will error and return None
                 elements.append("non_existent")
                 non_existent = True
-        elements.append(entity.key.id_or_name)
+        elements.append(str(entity.key.id_or_name))
         files.append(None if append_none and non_existent else "/".join(elements))
     return files
